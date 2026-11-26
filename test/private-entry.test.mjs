@@ -1,0 +1,61 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+
+test('only approved identities can open the shop, call Beaver, and receive an 18-PNG ZIP', async t => {
+  const { createPrivateServer } = await import('../private-server.mjs');
+  const { createImageBridge } = await import('../image-bridge.mjs');
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  const jwks = createLocalJWKSet({ keys: [{ ...await exportJWK(publicKey), kid: 'fixture' }] });
+  const web = 'https://shop.test.invalid', mcp = 'https://connector.test.invalid', issuer = 'https://id.test.invalid';
+  const config = { web, mcp, accessIssuer: issuer, accessAudience: 'beaver-test', accessEmail: 'backup@example.invalid', mcpAudience: 'mcp-beaver-test' };
+  const token = (aud, claims) => new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'fixture' }).setIssuer(issuer).setAudience(aud).setExpirationTime('5m').sign(privateKey);
+  const root = process.env.BEAVER_TEST_ENGINE_DIR;
+  assert.ok(root, 'Fixture modules must come from the pinned Beaver revision');
+  const eng = await import(pathToFileURL(resolve(root, 'cloudflare/worker/processor.mjs')));
+  const core = await import(pathToFileURL(resolve(root, 'assets/beaver-core.mjs')));
+  const crop = await import(pathToFileURL(resolve(root, 'cloudflare/worker/crop-layout-contract.mjs')));
+  const bridge = await createImageBridge(null, { engine: { ...eng, ...core, ...crop }, origin: web });
+  const server = createPrivateServer({ config, bridge, accessKey: jwks });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  // Node's raw HTTP host header is needed because these demo origins are not hosted.
+  const { request } = await import('node:http');
+  const go = (origin, path, options = {}) => new Promise((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: server.address().port, path, method: options.method || 'GET', headers: { host: new URL(origin).host, ...options.headers } }, res => {
+      const chunks = []; res.on('data', c => chunks.push(c));
+      res.on('end', () => { const data = Buffer.concat(chunks); resolve({ status: res.statusCode, headers: res.headers, data, json: () => JSON.parse(data) }); });
+    }); req.on('error', reject); req.end(options.body);
+  });
+  const access = { 'cf-access-jwt-assertion': await token('beaver-test', { email: 'backup@example.invalid' }) };
+  assert.equal((await go(web, '/')).status, 401);
+  assert.equal((await go(web, '/', { headers: { 'cf-access-jwt-assertion': await token('beaver-test', { email: 'other@example.invalid' }) } })).status, 403);
+  assert.equal((await go(web, '/', { headers: access })).status, 200);
+  assert.equal((await go(web, '/api/orders', { headers: access })).status, 404);
+  const auth = await token('mcp-beaver-test', { email: 'backup@example.invalid' });
+  const rpc = (method, params = {}, assertion = auth) => go(mcp, '/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'cf-access-jwt-assertion': assertion } });
+  assert.equal((await rpc('tools/list', {}, access['cf-access-jwt-assertion'])).status, 401);
+  assert.equal((await rpc('tools/list', {}, await token('mcp-beaver-test', { email: 'other@example.invalid' }))).status, 403);
+  const init = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  assert.equal(init.json().result.serverInfo.name, 'the-beaver');
+  const list = await rpc('tools/list');
+  assert.deepEqual(list.json().result.tools.map(x => x.name), ['open_sticker_studio']);
+  const tool = await rpc('tools/call', { name: 'open_sticker_studio', arguments: {} });
+  assert.deepEqual(tool.json().result.structuredContent, { studio_url: web + '/' });
+  const pics = async (w, h) => await eng.encodePng({ width: w, height: h, rgba: new Uint8Array(w*h*4).fill(255) });
+  const png = await pics(32, 32);
+  const post = (path, type, body, headers = access) => go(web, path, { method: 'POST', body, headers: { ...headers, origin: web, 'content-type': type } });
+  assert.equal((await post('/api/images/cut', 'image/png', png, {})).status, 401);
+  const cut = await post('/api/images/cut', 'image/png', png);
+  assert.equal(cut.status, 200);
+  assert.equal(cut.json().length, 16);
+  const entries = cut.json().map((png, i) => ({ name: String(i+1).padStart(2,'0')+'.png', png }));
+  for (const [name,w,h] of [['main.png',240,240],['tab.png',96,74]]) entries.push({ name, png: Buffer.from(await pics(w,h)).toString('base64') });
+  const zip = await post('/api/images/zip', 'application/json', JSON.stringify(entries));
+  assert.equal(zip.status, 200);
+  assert.equal(zip.headers['content-type'], 'application/zip');
+  assert.equal(zip.data.readUInt32LE(zip.data.length-22), 0x06054b50);
+  assert.equal(zip.data.readUInt16LE(zip.data.length-12), 18);
+});

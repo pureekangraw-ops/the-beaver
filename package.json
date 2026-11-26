@@ -1,0 +1,14 @@
+{
+  "name": "the-beaver-private",
+  "version": "1.0.0",
+  "description": "หน้าร้านงานภาพจาก Stitch รุ่น undo. รอบนี้เปิดให้ตัดสติกเกอร์ภาพนิ่ง LINE จากแผ่นกริด 4 × 4 เท่านั้น ภาพช่องแรกใช้เป็นค่าเริ่มต้นของ main และ tab ซึ่งเปลี่ยนได้จากหน้าถาดผลงาน",
+  "scripts": {
+    "test": "node --test",
+    "start": "node private-server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "jose": "6.2.18"
+  },
+  "private": true
+}
