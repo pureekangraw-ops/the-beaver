@@ -33,3 +33,11 @@ BEAVER_ENGINE_REPO='/path/to/ygg-beaver' node server.mjs
 5. ตรวจรับหนึ่งรอบ: บัญชีสำรองพบเพียง `open_sticker_studio`, เปิดหน้า, ใช้ภาพตัวอย่าง, เปิด ZIP ที่มี 01–16 + main/tab และบัญชีอื่นไม่ผ่าน Access นอกขอบเขตงานนี้: แต่งธีม LINE, เปิดขาย, ให้บุคคลทั่วไปสมัคร หรือปรับสิทธิ์โรงงาน
 
 หลักฐานในเครื่อง: `BEAVER_TEST_ENGINE_DIR=/path/to/pinned-checkout npm test` ใช้ JWT fixture และโมดูล engine จริง ตรวจว่าไม่มีสิทธิ์เมื่อไม่ได้ลงชื่อ/เป็นคนละอีเมล/ใช้ JWT จากคนละ Access app จากนั้นเรียก MCP และ PNG → ZIP ผ่าน HTTP. ไม่ใช่หลักฐาน OAuth จริงกับ ChatGPT หรือ Cloudflare.
+
+## Cloudflare Worker: เดโมเว็บโดยตรง
+เดโมเว็บแยกที่ [beaver-demo.yggmetro.com](https://beaver-demo.yggmetro.com/) ใช้ Worker `the-beaver-private-demo` ภายใต้ Cloudflare Access ไม่ต้องมี Node host แยกหรือใช้ credential โรงงาน ไม่รวม MCP ใน Worker รุ่นนี้; ตัวอย่าง Node MCP ข้างต้นเป็นอีกเส้นทางหนึ่ง
+
+1. ใช้ `npm ci` และ `node cloudflare/prepare-engine.mjs /path/to/ygg-beaver` เพื่อดึง 3 โมดูลจาก revision ที่ระบุเข้าพื้นที่ build เท่านั้น (ไม่ commit โมดูลหรือ bundle)
+2. รัน `node cloudflare/build.mjs`. อัปโหลด `.worker-build/beaver-worker.mjs` เป็น module พร้อม `nodejs_compat`. ตั้ง bindings: `BEAVER_WEB_ORIGIN`, `BEAVER_ACCESS_ISSUER`, `BEAVER_ACCESS_AUD`, `BEAVER_ALLOWED_EMAIL`; ห้ามใส่อีเมลหรือคีย์จริงใน repo
+3. สร้าง Access สำหรับ hostname ตรงตัวและอนุญาตเพียงผู้ทดสอบที่ยืนยันแล้ว จากนั้นปิด workers.dev และ Preview URLs ก่อนผูก custom domain ห้ามแก้ Access ของโรงงาน
+4. ตรวจด้วยภาพตัวอย่าง 4×4: เข้าด้วยบัญชีที่อนุญาต → หน้าส่งภาพ → ตัด 16 ช่อง → ดาวน์โหลด ZIP → เปิดดู 18 ไฟล์. การทดสอบ local หรือหน้า login ไม่ใช่หลักฐานว่าบัญชีจริงดาวน์โหลดแล้ว
